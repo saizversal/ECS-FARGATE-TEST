@@ -18,9 +18,10 @@ env:
   ACCOUNT_ID: 890742570780
   CONTAINER_PORT: 3000
   STACK_NAME: ecs-test-stack
+  TEMPLATE_FILE: template.yaml
   ECS_CLUSTER_NAME: ecs-fargate-cluster
   ECS_CONTAINER_NAME: ecs-fargate-container
-  ECR_IMAGE_URI: 890742570780.dkr.ecr.us-east-1.amazonaws.com/ecs-test:latest
+  ECR_IMAGE_URI: ${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
 permissions:
   id-token: write
@@ -29,22 +30,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ${{ inputs.Runner }}
-    env:  # Job-level env available to all steps and scripts
-      AWS_REGION: ${{ env.AWS_REGION }}
-      ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
-      PROJECT_NAME: ${{ env.PROJECT_NAME }}
-      ECS_CLUSTER_NAME: ${{ env.ECS_CLUSTER_NAME }}
-      ECS_CONTAINER_NAME: ${{ env.ECS_CONTAINER_NAME }}
-      ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
-      CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
-      STACK_NAME: ${{ env.STACK_NAME }}
-      ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-      IMAGE_TAG: ${{ env.IMAGE_TAG }}
-
     defaults:
       run:
-        working-directory: ./ecs-script
-
+        working-directory: ./  # no subdirectories
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,10 +50,21 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          IMAGE_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
-          echo "Building $IMAGE_URI"
-          docker build -t $IMAGE_URI .
-          docker push $IMAGE_URI
+          echo "Building and pushing Docker image..."
+          docker build -t $ECR_IMAGE_URI .
+          docker push $ECR_IMAGE_URI
+        env:
+          ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
 
-      - name: Deploy CloudFormation stack
+      - name: Deploy CloudFormation stack using shell script
         run: ./ecs-fargate.sh
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          ECS_CLUSTER_NAME: ${{ env.ECS_CLUSTER_NAME }}
+          ECS_CONTAINER_NAME: ${{ env.ECS_CONTAINER_NAME }}
+          ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
+          CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
+          STACK_NAME: ${{ env.STACK_NAME }}
+          TEMPLATE_FILE: ${{ env.TEMPLATE_FILE }}
