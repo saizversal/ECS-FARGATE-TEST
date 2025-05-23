@@ -1,6 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >
-  Full ECS + API Gateway + VPC + Endpoints setup for GraphQL API
+Description: ECS Fargate + ALB + API Gateway + VPC + ECR for GraphQL API
 
 Parameters:
   ProjectName:
@@ -21,52 +20,44 @@ Parameters:
   DesiredCount:
     Type: Number
     Default: 1
-  ImageUri:
-    Type: String
-    Description: URI for the Docker image 
 
 Resources:
 
-  # VPC & Subnets
+  # VPC and networking
   VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCidr
-      EnableDnsSupport: true
       EnableDnsHostnames: true
-      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-vpc" }]
+      EnableDnsSupport: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref PublicSubnet1Cidr
-      MapPublicIpOnLaunch: true
       AvailabilityZone: !Select [0, !GetAZs '']
-      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-public-subnet-1" }]
+      MapPublicIpOnLaunch: true
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref PrivateSubnet1Cidr
-      MapPublicIpOnLaunch: false
       AvailabilityZone: !Select [0, !GetAZs '']
-      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-subnet-1" }]
+      MapPublicIpOnLaunch: false
 
-  # Internet Gateway + NAT
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Properties:
-      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-igw" }]
-
-  AttachIGW:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-
-  EIP:
+  # NAT Gateway
+  EIPNatGateway:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
@@ -74,10 +65,9 @@ Resources:
   NatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt EIP.AllocationId
+      AllocationId: !GetAtt EIPNatGateway.AllocationId
       SubnetId: !Ref PublicSubnet1
 
-  # Route Tables
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -85,7 +75,6 @@ Resources:
 
   PublicRoute:
     Type: AWS::EC2::Route
-    DependsOn: AttachIGW
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
@@ -103,7 +92,6 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGateway
 
-  # Route Associations
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -120,18 +108,18 @@ Resources:
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow traffic to ECS containers
+      GroupDescription: ECS security group
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: !Ref ContainerPort
-          ToPort: !Ref ContainerPort
+          FromPort: 80
+          ToPort: 80
           CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  # ECS + Fargate
+  # ECS Cluster
   ECSCluster:
     Type: AWS::ECS::Cluster
 
@@ -148,131 +136,72 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-  ECSLogGroup:
-    Type: AWS::Logs::LogGroup
+  ECRRepository:
+    Type: AWS::ECR::Repository
     Properties:
-      LogGroupName: !Sub "/ecs/${ProjectName}"
-      RetentionInDays: 7
+      RepositoryName: !Ref ProjectName
 
-  TaskDefinition:
+  ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
+      Family: !Sub "${ProjectName}-task"
       Cpu: "256"
       Memory: "512"
       NetworkMode: awsvpc
-      RequiresCompatibilities: [FARGATE]
-      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSExecutionRole
       ContainerDefinitions:
-        - Name: graphql
-          Image: !Ref ImageUri
+        - Name: graphql-container
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}:latest"
           PortMappings:
             - ContainerPort: !Ref ContainerPort
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref ECSLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: ecs
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1
+      SecurityGroups:
+        - !Ref ECSSecurityGroup
+      Scheme: internet-facing
+      Type: application
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: [ECSCluster, TaskDefinition]
     Properties:
       Cluster: !Ref ECSCluster
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
-      TaskDefinition: !Ref TaskDefinition
+      TaskDefinition: !Ref ECSTaskDefinition
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: [!Ref PrivateSubnet1]
-          SecurityGroups: [!Ref ECSSecurityGroup]
-
-  # API Gateway
-  HttpApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: !Sub "${ProjectName}-http-api"
-      ProtocolType: HTTP
-
-  VpcLink:
-    Type: AWS::ApiGatewayV2::VpcLink
-    Properties:
-      Name: !Sub "${ProjectName}-vpc-link"
-      SubnetIds: [!Ref PrivateSubnet1]
-      SecurityGroupIds: [!Ref ECSSecurityGroup]
-
-  Integration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref HttpApi
-      IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub "http://localhost:${ContainerPort}"
-      IntegrationMethod: ANY
-      ConnectionType: VPC_LINK
-      ConnectionId: !Ref VpcLink
-      PayloadFormatVersion: "1.0"
-
-  Route:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: "ANY /{proxy+}"
-      Target: !Sub "integrations/${Integration}"
-
-  Deployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn: Route
-    Properties:
-      ApiId: !Ref HttpApi
-
-  Stage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref HttpApi
-      DeploymentId: !Ref Deployment
-      StageName: dev
-      AutoDeploy: true
-
-  # Interface Endpoints
-  ECRDockerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
-      VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnet1]
-      SecurityGroupIds: [!Ref ECSSecurityGroup]
-      PrivateDnsEnabled: true
-
-  ECRApiEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
-      VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnet1]
-      SecurityGroupIds: [!Ref ECSSecurityGroup]
-      PrivateDnsEnabled: true
-
-  CloudWatchLogsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
-      VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnet1]
-      SecurityGroupIds: [!Ref ECSSecurityGroup]
-      PrivateDnsEnabled: true
-
-Outputs:
-  ApiUrl:
-    Description: API Gateway URL
-    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/dev/"
-
-  Cluster:
-    Description: ECS Cluster Name
-    Value: !Ref ECSCluster
-
-  VPCId:
-    Value: !Ref VPC
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: graphql-container
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 60
