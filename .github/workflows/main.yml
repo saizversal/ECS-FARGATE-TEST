@@ -4,10 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       Runner:
-        description: GitHub runner
-        required: true
-        default: ubuntu-latest
         type: choice
+        description: GitHub runner
         options:
           - ubuntu-latest
           - self-hosted
@@ -22,6 +20,7 @@ env:
   STACK_NAME: ecs-test-stack
   ECS_CLUSTER_NAME: ecs-fargate-cluster
   ECS_CONTAINER_NAME: ecs-fargate-container
+  # Remove ECR_IMAGE_URI here as it is dynamic
 
 permissions:
   id-token: write
@@ -29,7 +28,11 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ${{ github.event.inputs.Runner }}
+    runs-on: ${{ inputs.Runner }}
+
+    defaults:
+      run:
+        working-directory: ./  # root folder, no ecs-script folder as you said
 
     steps:
       - name: Checkout repository
@@ -43,18 +46,23 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
+        id: build_and_push
         run: |
           IMAGE_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
-          echo "Building image $IMAGE_URI"
+          echo "Building $IMAGE_URI"
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
           echo "ECR_IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - name: Make deploy script executable
         run: chmod +x ./ecs-fargate.sh
+
+      - name: Debug ECR_IMAGE_URI
+        run: echo "ECR_IMAGE_URI=$ECR_IMAGE_URI"
 
       - name: Deploy CloudFormation stack
         run: ./ecs-fargate.sh
@@ -64,6 +72,6 @@ jobs:
           PROJECT_NAME: ${{ env.PROJECT_NAME }}
           ECS_CLUSTER_NAME: ${{ env.ECS_CLUSTER_NAME }}
           ECS_CONTAINER_NAME: ${{ env.ECS_CONTAINER_NAME }}
-          ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}    # <-- This now uses the runtime variable set above
+          ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
           CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
           STACK_NAME: ${{ env.STACK_NAME }}
