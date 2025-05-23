@@ -153,6 +153,17 @@ Resources:
           ToPort: !Ref ContainerPort
           CidrIp: 0.0.0.0/0
 
+  CloudMapService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Ref ProjectName
+      NamespaceId: !Ref CloudMapNamespace
+      DnsConfig:
+        DnsRecords:
+          - TTL: 60
+            Type: A
+        RoutingPolicy: WEIGHTED
+
   ECSService:
     Type: AWS::ECS::Service
     DependsOn: CloudMapService
@@ -172,16 +183,15 @@ Resources:
         - RegistryArn: !GetAtt CloudMapService.Arn
       TaskDefinition: !Ref TaskDefinition
 
-  CloudMapService:
-    Type: AWS::ServiceDiscovery::Service
+  VPCLink:
+    Type: AWS::ApiGatewayV2::VpcLink
     Properties:
-      Name: !Ref ProjectName
-      NamespaceId: !Ref CloudMapNamespace
-      DnsConfig:
-        DnsRecords:
-          - TTL: 60
-            Type: A
-        RoutingPolicy: WEIGHTED
+      Name: !Sub "${ProjectName}-vpc-link"
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroupIds:
+        - !Ref SecurityGroup
 
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
@@ -191,10 +201,13 @@ Resources:
 
   HttpApiIntegration:
     Type: AWS::ApiGatewayV2::Integration
+    DependsOn: VPCLink
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub "http://${ProjectName}.local:${ContainerPort}"
+      IntegrationUri: !Sub "http://${ProjectName}.local:${ContainerPort}/"
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref VPCLink
       PayloadFormatVersion: "1.0"
 
   HttpApiRoute:
