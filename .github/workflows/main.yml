@@ -18,7 +18,9 @@ env:
   ACCOUNT_ID: 890742570780
   CONTAINER_PORT: 3000
   STACK_NAME: ecs-test-stack
-  TEMPLATE_FILE: template.yaml
+  ECS_CLUSTER_NAME: ecs-fargate-cluster
+  ECS_CONTAINER_NAME: ecs-fargate-container
+  ECR_IMAGE_URI: 890742570780.dkr.ecr.us-east-1.amazonaws.com/ecs-test:latest
 
 permissions:
   id-token: write
@@ -27,6 +29,22 @@ permissions:
 jobs:
   deploy:
     runs-on: ${{ inputs.Runner }}
+    env:  # Job-level env available to all steps and scripts
+      AWS_REGION: ${{ env.AWS_REGION }}
+      ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+      PROJECT_NAME: ${{ env.PROJECT_NAME }}
+      ECS_CLUSTER_NAME: ${{ env.ECS_CLUSTER_NAME }}
+      ECS_CONTAINER_NAME: ${{ env.ECS_CONTAINER_NAME }}
+      ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
+      CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
+      STACK_NAME: ${{ env.STACK_NAME }}
+      ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+      IMAGE_TAG: ${{ env.IMAGE_TAG }}
+
+    defaults:
+      run:
+        working-directory: ./ecs-script
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,41 +56,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Create ECR repository if missing
-        run: |
-          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} || aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
         run: |
-          IMAGE_URI=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          IMAGE_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
           echo "Building $IMAGE_URI"
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
 
       - name: Deploy CloudFormation stack
-        run: |
-          IMAGE_URI=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          aws cloudformation deploy \
-            --stack-name ${{ env.STACK_NAME }} \
-            --template-file ${{ env.TEMPLATE_FILE }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region ${{ env.AWS_REGION }} \
-            --parameter-overrides \
-              AWSRegion=${{ env.AWS_REGION }} \
-              AWSAccountID=${{ env.ACCOUNT_ID }} \
-              ProjectName=${{ env.PROJECT_NAME }} \
-              ECRCluster=${{ env.PROJECT_NAME }} \
-              ECRContainer=${{ env.PROJECT_NAME }} \
-              ECSContainerImageURI=$IMAGE_URI \
-              ContainerPort=${{ env.CONTAINER_PORT }}
-
-      - name: Output CloudFormation stack info
-        run: |
-          aws cloudformation describe-stacks \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].Outputs"
+        run: ./ecs-fargate.sh
