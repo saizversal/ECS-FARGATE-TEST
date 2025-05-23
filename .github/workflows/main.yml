@@ -30,9 +30,10 @@ jobs:
   deploy:
     runs-on: ${{ inputs.Runner }}
 
-    defaults:
-      run:
-        working-directory: ./ecs-script
+    # No working-directory, because files are in root
+    # defaults:
+    #   run:
+    #     working-directory: .
 
     steps:
       - name: Checkout repository
@@ -67,5 +68,5 @@ jobs:
           ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}
           CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
           STACK_NAME: ${{ env.STACK_NAME }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          # TEMPLATE_FILE is only needed if your script uses it explicitly
+
