@@ -18,17 +18,16 @@ env:
   ACCOUNT_ID: 890742570780
   CONTAINER_PORT: 3000
   STACK_NAME: ecs-test-stack
-  TEMPLATE_FILE: ecs-script/template.yaml
+  TEMPLATE_FILE: template.yaml  # since template.yaml is in root
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
   deploy:
     runs-on: ${{ inputs.Runner }}
-    defaults:
-      run:
-        working-directory: ./ecs-script
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
