@@ -18,7 +18,7 @@ env:
   ACCOUNT_ID: 890742570780
   CONTAINER_PORT: 3000
   STACK_NAME: ecs-test-stack
-  TEMPLATE_FILE: template.yaml  # since template.yaml is in root
+  TEMPLATE_FILE: template.yaml
 
 permissions:
   id-token: write
@@ -27,7 +27,6 @@ permissions:
 jobs:
   deploy:
     runs-on: ${{ inputs.Runner }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,6 +37,10 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create ECR repository if missing
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} || aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
 
       - name: Login to Amazon ECR
         id: login-ecr
