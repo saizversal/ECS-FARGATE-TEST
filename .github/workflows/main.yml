@@ -4,8 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       Runner:
-        type: choice
         description: GitHub runner
+        required: true
+        default: ubuntu-latest
+        type: choice
         options:
           - ubuntu-latest
           - self-hosted
@@ -27,11 +29,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ${{ inputs.Runner }}
-
-    defaults:
-      run:
-        working-directory: ./  # adjust if your script is in a subfolder
+    runs-on: ${{ github.event.inputs.Runner }}
 
     steps:
       - name: Checkout repository
@@ -48,13 +46,12 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
-        id: build-push
         run: |
           IMAGE_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
           echo "Building image $IMAGE_URI"
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "ECR_IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - name: Make deploy script executable
         run: chmod +x ./ecs-fargate.sh
@@ -67,6 +64,6 @@ jobs:
           PROJECT_NAME: ${{ env.PROJECT_NAME }}
           ECS_CLUSTER_NAME: ${{ env.ECS_CLUSTER_NAME }}
           ECS_CONTAINER_NAME: ${{ env.ECS_CONTAINER_NAME }}
-          ECR_IMAGE_URI: ${{ env.IMAGE_URI }}
+          ECR_IMAGE_URI: ${{ env.ECR_IMAGE_URI }}    # <-- This now uses the runtime variable set above
           CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
           STACK_NAME: ${{ env.STACK_NAME }}
