@@ -1,0 +1,77 @@
+name: Deploy to ECS Fargate
+
+on:
+  workflow_dispatch:
+    inputs:
+      Runner:
+        type: choice
+        description: GitHub runner
+        options:
+          - ubuntu-latest
+          - self-hosted
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: ecs-fargate
+  ECR_REPOSITORY: ecs-test
+  IMAGE_TAG: latest
+  ACCOUNT_ID: 890742570780
+  CONTAINER_PORT: 3000
+  STACK_NAME: ecs-test-stack
+  TEMPLATE_FILE: ecs-script/template.yaml
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ${{ inputs.Runner }}
+    defaults:
+      run:
+        working-directory: ./ecs-script
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_URI=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          echo "Building $IMAGE_URI"
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+      - name: Deploy CloudFormation stack
+        run: |
+          IMAGE_URI=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          aws cloudformation deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-file ${{ env.TEMPLATE_FILE }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --parameter-overrides \
+              AWSRegion=${{ env.AWS_REGION }} \
+              AWSAccountID=${{ env.ACCOUNT_ID }} \
+              ProjectName=${{ env.PROJECT_NAME }} \
+              ECRCluster=${{ env.PROJECT_NAME }} \
+              ECRContainer=${{ env.PROJECT_NAME }} \
+              ECSContainerImageURI=$IMAGE_URI \
+              ContainerPort=${{ env.CONTAINER_PORT }}
+
+      - name: Output CloudFormation stack info
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs"
