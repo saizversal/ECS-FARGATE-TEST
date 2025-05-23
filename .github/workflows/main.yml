@@ -20,7 +20,6 @@ env:
   STACK_NAME: ecs-test-stack
   ECS_CLUSTER_NAME: ecs-fargate-cluster
   ECS_CONTAINER_NAME: ecs-fargate-container
-  # Remove ECR_IMAGE_URI here as it is dynamic
 
 permissions:
   id-token: write
@@ -32,7 +31,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./  # root folder, no ecs-script folder as you said
+        working-directory: ./
 
     steps:
       - name: Checkout repository
@@ -46,11 +45,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
-        id: build_and_push
         run: |
           IMAGE_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
           echo "Building $IMAGE_URI"
@@ -60,9 +57,6 @@ jobs:
 
       - name: Make deploy script executable
         run: chmod +x ./ecs-fargate.sh
-
-      - name: Debug ECR_IMAGE_URI
-        run: echo "ECR_IMAGE_URI=$ECR_IMAGE_URI"
 
       - name: Deploy CloudFormation stack
         run: ./ecs-fargate.sh
