@@ -2,6 +2,12 @@
 set -e
 
 echo "Deploying CloudFormation stack..."
+echo "Using ECSContainerImageURI: $ECR_IMAGE_URI"
+
+if [[ -z "$ECR_IMAGE_URI" ]]; then
+  echo "❌ ECR_IMAGE_URI is not set. Exiting."
+  exit 1
+fi
 
 aws cloudformation deploy \
   --template-file template.yaml \
