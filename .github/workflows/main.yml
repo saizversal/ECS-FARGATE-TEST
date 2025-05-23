@@ -1,3 +1,15 @@
+name: Deploy to ECS Fargate
+
+on:
+  workflow_dispatch:
+    inputs:
+      Runner:
+        type: choice
+        description: GitHub runner
+        options:
+          - ubuntu-latest
+          - self-hosted
+
 env:
   AWS_REGION: us-east-1
   PROJECT_NAME: ecs-fargate
@@ -9,6 +21,10 @@ env:
   ECS_CLUSTER_NAME: ecs-fargate-cluster
   ECS_CONTAINER_NAME: ecs-fargate-container
   ECR_IMAGE_URI: 890742570780.dkr.ecr.us-east-1.amazonaws.com/ecs-test:latest
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
