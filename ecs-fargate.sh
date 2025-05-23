@@ -14,5 +14,5 @@ aws cloudformation deploy \
     ProjectName="$PROJECT_NAME" \
     ECRCluster="$ECS_CLUSTER_NAME" \
     ECRContainer="$ECS_CONTAINER_NAME" \
-    ImageUri="$ECR_IMAGE_URI" \
+    ECSContainerImageURI="$ECR_IMAGE_URI" \
     ContainerPort="$CONTAINER_PORT"
