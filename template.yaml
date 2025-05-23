@@ -8,9 +8,9 @@ Parameters:
     Type: String
   ProjectName:
     Type: String
-  ECSClusterName:
+  ECRCluster:
     Type: String
-  ECSContainerName:
+  ECRContainer:
     Type: String
   ECSContainerImageURI:
     Type: String
@@ -136,7 +136,7 @@ Resources:
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: !Ref ECSClusterName
+      ClusterName: !Sub "${ProjectName}-cluster"
 
   ECSExecutionRole:
     Type: AWS::IAM::Role
@@ -154,14 +154,14 @@ Resources:
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Ref ProjectName
+      Family: !Sub "${ProjectName}-task"
       Cpu: 256
       Memory: 512
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-        - Name: !Ref ECSContainerName
+        - Name: !Ref ECRContainer
           Image: !Ref ECSContainerImageURI
           PortMappings:
             - ContainerPort: !Ref ContainerPort
@@ -182,7 +182,7 @@ Resources:
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: [TaskDefinition, ECSCluster]
+    DependsOn: TaskDefinition
     Properties:
       ServiceName: !Sub "${ProjectName}-service"
       Cluster: !Ref ECSCluster
@@ -192,7 +192,8 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
-          SecurityGroups: [!Ref ECSSecurityGroup]
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
           Subnets:
             - !Ref PublicSubnet1
             - !Ref PublicSubnet2
@@ -200,7 +201,7 @@ Resources:
 Outputs:
   ECSClusterName:
     Value: !Ref ECSCluster
-    Description: ECS Cluster name
+    Description: ECS Cluster Name
   ServiceName:
     Value: !Ref ECSService
-    Description: ECS Service name
+    Description: ECS Service Name
