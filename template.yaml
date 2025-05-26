@@ -126,7 +126,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          CidrIp: 10.0.0.0/16
       Tags:
         - Key: Name
           Value: vpc-endpoint-sg
@@ -157,16 +157,13 @@ Resources:
         - !Ref PrivateSubnet2
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal: '*'
-            Action:
-              - 'ecr:GetAuthorizationToken'
-              - 'ecr:BatchCheckLayerAvailability'
-              - 'ecr:GetDownloadUrlForLayer'
-              - 'ecr:BatchGetImage'
+            Action: '*'
             Resource: '*'
 
   ECRDkrEndpoint:
@@ -180,16 +177,13 @@ Resources:
         - !Ref PrivateSubnet2
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal: '*'
-            Action:
-              - 'ecr:GetAuthorizationToken'
-              - 'ecr:BatchCheckLayerAvailability'
-              - 'ecr:GetDownloadUrlForLayer'
-              - 'ecr:BatchGetImage'
+            Action: '*'
             Resource: '*'
 
   # VPC Endpoint for S3 (Gateway endpoint - no charge)
@@ -214,15 +208,13 @@ Resources:
         - !Ref PrivateSubnet2
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal: '*'
-            Action:
-              - 'logs:CreateLogGroup'
-              - 'logs:CreateLogStream'
-              - 'logs:PutLogEvents'
+            Action: '*'
             Resource: '*'
 
   ECSExecutionRole:
