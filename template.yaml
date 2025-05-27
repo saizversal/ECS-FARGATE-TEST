@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: ECS Fargate with Cloud Map and API Gateway integration using VPC Endpoints
+Description: ECS Fargate with Cloud Map and API Gateway integration using VPC Endpoints (No NAT Gateway)
 
 Parameters:
   AWSRegion:
@@ -87,7 +87,6 @@ Resources:
         - Key: Name
           Value: ecs-api-public-rt
 
-  # Missing PrivateRouteTable - this was the issue
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -102,33 +101,6 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
-
-  # NAT Gateway for private subnet internet access (for ECR fallback)
-  NATGatewayEIP:
-    Type: AWS::EC2::EIP
-    DependsOn: AttachGateway
-    Properties:
-      Domain: vpc
-      Tags:
-        - Key: Name
-          Value: ecs-api-nat-eip
-
-  NATGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NATGatewayEIP.AllocationId
-      SubnetId: !Ref PublicSubnet1
-      Tags:
-        - Key: Name
-          Value: ecs-api-nat-gateway
-
-  # Route to NAT Gateway for private subnets
-  PrivateRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NATGateway
 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -148,7 +120,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # Create ECS Security Group first
+  # Enhanced ECS Security Group with VPC endpoint access
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -159,22 +131,28 @@ Resources:
           FromPort: !Ref ContainerPort
           ToPort: !Ref ContainerPort
           CidrIp: 10.0.0.0/16
+          Description: "Allow internal VPC traffic to container port"
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 0.0.0.0/0
+          CidrIp: 10.0.0.0/16
           Description: "HTTPS to VPC Endpoints"
         - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: "HTTP to VPC Endpoints"
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 10.0.0.0/16
+          Description: "DNS resolution within VPC"
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 10.0.0.0/16
+          Description: "DNS resolution within VPC"
       Tags:
         - Key: Name
           Value: ecs-service-sg
 
-  # VPC Endpoints Security Group - More permissive for troubleshooting
+  # VPC Endpoints Security Group - Allow all traffic from ECS
   VPCEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -184,19 +162,13 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
-          Description: "HTTPS access from VPC"
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 10.0.0.0/16
-          Description: "HTTP access from VPC"
-        # Allow from ECS Security Group specifically
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: "HTTPS from ECS tasks"
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup
-          Description: "HTTPS from ECS tasks"
+          CidrIp: 10.0.0.0/16
+          Description: "HTTPS access from VPC"
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -204,7 +176,7 @@ Resources:
         - Key: Name
           Value: vpc-endpoint-sg
 
-  # VPC Endpoints for ECR - Enhanced configuration
+  # VPC Endpoints for ECR - Critical for image pulling
   ECRApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -222,14 +194,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "ecr:GetAuthorizationToken"
-              - "ecr:BatchCheckLayerAvailability"
-              - "ecr:GetDownloadUrlForLayer"
-              - "ecr:BatchGetImage"
-              - "ecr:DescribeRepositories"
-              - "ecr:DescribeImages"
-              - "ecr:ListImages"
+            Action: "*"
             Resource: "*"
 
   ECRDkrEndpoint:
@@ -249,31 +214,27 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "ecr:GetAuthorizationToken"
-              - "ecr:BatchCheckLayerAvailability"
-              - "ecr:GetDownloadUrlForLayer"
-              - "ecr:BatchGetImage"
-              - "ecr:DescribeRepositories"
-              - "ecr:DescribeImages"
-              - "ecr:ListImages"
+            Action: "*"
             Resource: "*"
 
-  # VPC Endpoint for S3 (Gateway endpoint - no charge)
+  # VPC Endpoint for S3 (Gateway endpoint - required for ECR layer storage)
   S3Endpoint:
     Type: AWS::EC2::VPCEndpoint
-    DependsOn: 
-      - PrivateRouteTable
-      - PrivateSubnet1RouteTableAssociation
-      - PrivateSubnet2RouteTableAssociation
     Properties:
       VpcId: !Ref VPC
       ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
       VpcEndpointType: Gateway
       RouteTableIds:
         - !Ref PrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
 
-  # VPC Endpoint for CloudWatch Logs - Enhanced
+  # VPC Endpoint for CloudWatch Logs
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -291,15 +252,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "logs:CreateLogGroup"
-              - "logs:CreateLogStream"
-              - "logs:PutLogEvents"
-              - "logs:DescribeLogStreams"
-              - "logs:DescribeLogGroups"
+            Action: "*"
             Resource: "*"
 
-  # VPC Endpoint for ECS - Enhanced
+  # VPC Endpoint for ECS
   ECSEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -317,21 +273,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "ecs:CreateCluster"
-              - "ecs:DeregisterContainerInstance"
-              - "ecs:DiscoverPollEndpoint"
-              - "ecs:Poll"
-              - "ecs:RegisterContainerInstance"
-              - "ecs:StartTelemetrySession"
-              - "ecs:UpdateContainerInstancesState"
-              - "ecs:Submit*"
-              - "ecs:DescribeClusters"
-              - "ecs:DescribeServices"
-              - "ecs:DescribeTasks"
+            Action: "*"
             Resource: "*"
 
-  # VPC Endpoint for ECS Agent - Enhanced
+  # VPC Endpoint for ECS Agent
   ECSAgentEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -349,16 +294,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "ecs:RegisterContainerInstance"
-              - "ecs:DeregisterContainerInstance"
-              - "ecs:DiscoverPollEndpoint"
-              - "ecs:Submit*"
-              - "ecs:Poll"
-              - "ecs:StartTelemetrySession"
+            Action: "*"
             Resource: "*"
 
-  # VPC Endpoint for ECS Telemetry - Enhanced
+  # VPC Endpoint for ECS Telemetry
   ECSTelemetryEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -376,11 +315,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action:
-              - "ecs:StartTelemetrySession"
+            Action: "*"
             Resource: "*"
 
-  # Enhanced ECS Execution Role with additional ECR permissions
+  # Enhanced ECS Execution Role with comprehensive ECR permissions
   ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -394,7 +332,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Policies:
-        - PolicyName: AdditionalECRAccess
+        - PolicyName: EnhancedECRAccess
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -406,23 +344,16 @@ Resources:
                   - "ecr:BatchGetImage"
                   - "ecr:DescribeRepositories"
                   - "ecr:DescribeImages"
+                  - "ecr:ListImages"
                 Resource: "*"
-
-  ECSPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub "${ProjectName}-ecs-policy"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - "ecr:*"
-              - "logs:*"
-              - "servicediscovery:*"
-            Resource: "*"
-      Roles:
-        - Ref: ECSExecutionRole
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                  - "logs:DescribeLogGroups"
+                Resource: "*"
 
   ECSCluster:
     Type: AWS::ECS::Cluster
@@ -449,8 +380,16 @@ Resources:
       HealthCheckCustomConfig:
         FailureThreshold: 1
 
+  # Log Group must be created before task definition
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}"
+      RetentionInDays: 7
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
+    DependsOn: [LogGroup]
     Properties:
       Family: !Sub "${ProjectName}-task"
       Cpu: 256
@@ -464,34 +403,28 @@ Resources:
           Image: !Ref ECSContainerImageURI
           PortMappings:
             - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-group: !Sub "/ecs/${ProjectName}"
               awslogs-region: !Ref AWSRegion
               awslogs-stream-prefix: ecs
-              awslogs-create-group: "true"
-          # ECS Health Check Configuration
+          # Simplified health check that doesn't require curl
           HealthCheck:
             Command:
               - "CMD-SHELL"
-              - !Sub |
-                curl -f http://localhost:${ContainerPort}${HealthCheckPath} || exit 1
+              - !Sub "wget --no-verbose --tries=1 --spider http://localhost:${ContainerPort}${HealthCheckPath} || exit 1"
             Interval: 30
             Timeout: 5
             Retries: 3
             StartPeriod: 60
           Essential: true
-          # Environment variables for health check
           Environment:
             - Name: HEALTH_CHECK_PATH
               Value: !Ref HealthCheckPath
-
-  LogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/ecs/${ProjectName}"
-      RetentionInDays: 7
+            - Name: PORT
+              Value: !Ref ContainerPort
 
   ECSService:
     Type: AWS::ECS::Service
@@ -501,6 +434,7 @@ Resources:
       - ServiceDiscoveryService
       - ECRApiEndpoint
       - ECRDkrEndpoint
+      - S3Endpoint
       - LogsEndpoint
       - ECSEndpoint
       - ECSAgentEndpoint
@@ -521,9 +455,7 @@ Resources:
           Subnets:
             - !Ref PrivateSubnet1
             - !Ref PrivateSubnet2
-      # Health check grace period - time to wait before health checks start
       HealthCheckGracePeriodSeconds: 300
-      # Deployment configuration for health checks
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 50
@@ -575,7 +507,6 @@ Resources:
       RouteKey: "ANY /"
       Target: !Sub "integrations/${ApiIntegration}"
 
-  # Health check route for API Gateway
   HealthRoute:
     Type: AWS::ApiGatewayV2::Route
     DependsOn: [ApiIntegration]
@@ -615,3 +546,7 @@ Outputs:
   ECSClusterName:
     Description: "ECS Cluster Name"
     Value: !Ref ECSCluster
+
+  VPCEndpointsCreated:
+    Description: "VPC Endpoints created for ECR connectivity"
+    Value: "ECR API, ECR DKR, S3, CloudWatch Logs, ECS, ECS Agent, ECS Telemetry"
