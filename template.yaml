@@ -87,6 +87,15 @@ Resources:
         - Key: Name
           Value: ecs-api-public-rt
 
+  # Missing PrivateRouteTable - this was the issue
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ecs-api-private-rt
+
   PublicRoute:
     Type: AWS::EC2::Route
     Properties:
