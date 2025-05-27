@@ -116,7 +116,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # VPC Endpoints Security Group
+  # VPC Endpoints Security Group - Secure configuration
   VPCEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -126,7 +126,14 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
+          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
           Value: vpc-endpoint-sg
@@ -140,10 +147,13 @@ Resources:
         - IpProtocol: tcp
           FromPort: !Ref ContainerPort
           ToPort: !Ref ContainerPort
-          CidrIp: 0.0.0.0/0
+          CidrIp: 10.0.0.0/16
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ecs-service-sg
 
   # VPC Endpoints for ECR
   ECRApiEndpoint:
@@ -162,9 +172,14 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: '*'
-            Action: '*'
-            Resource: '*'
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+            Resource: "*"
 
   ECRDkrEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -182,19 +197,14 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: '*'
-            Action: '*'
-            Resource: '*'
-
-  # VPC Endpoint for S3 (Gateway endpoint - no charge)
-  S3Endpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PrivateRouteTable
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+            Resource: "*"
 
   # VPC Endpoint for CloudWatch Logs
   LogsEndpoint:
@@ -213,9 +223,94 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: '*'
-            Action: '*'
-            Resource: '*'
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "logs:DescribeLogStreams"
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # VPC Endpoint for ECS (needed for task management)
+  ECSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "ecs:CreateCluster"
+              - "ecs:DeregisterContainerInstance"
+              - "ecs:DiscoverPollEndpoint"
+              - "ecs:Poll"
+              - "ecs:RegisterContainerInstance"
+              - "ecs:StartTelemetrySession"
+              - "ecs:UpdateContainerInstancesState"
+              - "ecs:Submit*"
+            Resource: "*"
+
+  # VPC Endpoint for ECS Agent
+  ECSAgentEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs-agent
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "ecs:RegisterContainerInstance"
+              - "ecs:DeregisterContainerInstance"
+              - "ecs:DiscoverPollEndpoint"
+              - "ecs:Submit*"
+              - "ecs:Poll"
+            Resource: "*"
+
+  # VPC Endpoint for ECS Telemetry
+  ECSTelemetryEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs-telemetry
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "ecs:StartTelemetrySession"
+            Resource: "*"
 
   ECSExecutionRole:
     Type: AWS::IAM::Role
@@ -292,14 +387,9 @@ Resources:
               awslogs-group: !Sub "/ecs/${ProjectName}"
               awslogs-region: !Ref AWSRegion
               awslogs-stream-prefix: ecs
-          HealthCheck:
-            Command: 
-              - "CMD-SHELL"
-              - !Sub "curl -f http://localhost:${ContainerPort}/health || exit 1"
-            Interval: 30
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 60
+              awslogs-create-group: "true"
+          # Removed health check that requires curl - many base images don't have it
+          Essential: true
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -309,7 +399,17 @@ Resources:
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: [TaskDefinition, ECSCluster, ServiceDiscoveryService, ECRApiEndpoint, ECRDkrEndpoint, S3Endpoint, LogsEndpoint]
+    DependsOn: 
+      - TaskDefinition
+      - ECSCluster
+      - ServiceDiscoveryService
+      - ECRApiEndpoint
+      - ECRDkrEndpoint
+      - S3Endpoint
+      - LogsEndpoint
+      - ECSEndpoint
+      - ECSAgentEndpoint
+      - ECSTelemetryEndpoint
     Properties:
       ServiceName: !Sub "${ProjectName}-service"
       Cluster: !Ref ECSCluster
@@ -326,6 +426,8 @@ Resources:
           Subnets:
             - !Ref PrivateSubnet1
             - !Ref PrivateSubnet2
+      # Added health check grace period
+      HealthCheckGracePeriodSeconds: 300
 
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
