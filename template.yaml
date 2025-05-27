@@ -126,11 +126,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -296,11 +296,7 @@ Resources:
             Principal:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
             Action:
-              - "ecs:RegisterContainerInstance"
-              - "ecs:DeregisterContainerInstance"
-              - "ecs:DiscoverPollEndpoint"
-              - "ecs:Submit*"
-              - "ecs:Poll"
+              - "ecs:Connect"
             Resource: "*"
 
   # VPC Endpoint for ECS Telemetry
@@ -323,62 +319,29 @@ Resources:
             Principal:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
             Action:
-              - "ecs:StartTelemetrySession"
+              - "ecs:Connect"
             Resource: "*"
-
-  ECSExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-
-  ECSPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub "${ProjectName}-ecs-policy"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - "ecr:*"
-              - "logs:*"
-              - "servicediscovery:*"
-            Resource: "*"
-      Roles:
-        - Ref: ECSExecutionRole
 
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub "${ProjectName}-cluster"
 
-  CloudMapNamespace:
-    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
     Properties:
-      Name: !Sub "${ProjectName}.local"
-      Vpc: !Ref VPC
-
-  ServiceDiscoveryService:
-    Type: AWS::ServiceDiscovery::Service
-    DependsOn: [CloudMapNamespace]
-    Properties:
-      Name: !Sub "${ProjectName}-service"
-      NamespaceId: !Ref CloudMapNamespace
-      DnsConfig:
-        RoutingPolicy: MULTIVALUE
-        DnsRecords:
-          - TTL: 10
-            Type: A
-      HealthCheckCustomConfig:
-        FailureThreshold: 1
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -402,18 +365,37 @@ Resources:
               awslogs-region: !Ref AWSRegion
               awslogs-stream-prefix: ecs
               awslogs-create-group: "true"
-          # Removed health check that requires curl - many base images don't have it
           Essential: true
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub "curl -f http://localhost:${ContainerPort}/health || exit 1"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
 
-  LogGroup:
-    Type: AWS::Logs::LogGroup
+  ServiceDiscoveryNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
     Properties:
-      LogGroupName: !Sub "/ecs/${ProjectName}"
-      RetentionInDays: 7
+      Name: !Sub "${ProjectName}.local"
+      Vpc: !Ref VPC
+      Description: Service discovery namespace for ECS
+
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: ECS service discovery
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+      DnsConfig:
+        DnsRecords:
+          - TTL: 60
+            Type: A
+        RoutingPolicy: MULTIVALUE
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: 
+    DependsOn:
       - TaskDefinition
       - ECSCluster
       - ServiceDiscoveryService
@@ -439,77 +421,15 @@ Resources:
           Subnets:
             - !Ref PrivateSubnet1
             - !Ref PrivateSubnet2
-      # Added health check grace period
       HealthCheckGracePeriodSeconds: 300
 
-  HttpApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: !Sub "${ProjectName}-http-api"
-      ProtocolType: HTTP
-
-  VpcLink:
-    Type: AWS::ApiGatewayV2::VpcLink
-    Properties:
-      Name: !Sub "${ProjectName}-vpc-link"
-      SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      SecurityGroupIds:
-        - !Ref ECSSecurityGroup
-
-  ApiIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    DependsOn: [VpcLink, HttpApi, ECSService]
-    Properties:
-      ApiId: !Ref HttpApi
-      IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub "http://${ProjectName}-service.${ProjectName}.local:${ContainerPort}"
-      IntegrationMethod: ANY
-      ConnectionType: VPC_LINK
-      ConnectionId: !Ref VpcLink
-      PayloadFormatVersion: "1.0"
-
-  RootRoute:
-    Type: AWS::ApiGatewayV2::Route
-    DependsOn: [ApiIntegration]
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: "ANY /{proxy+}"
-      Target: !Sub "integrations/${ApiIntegration}"
-
-  DefaultRoute:
-    Type: AWS::ApiGatewayV2::Route
-    DependsOn: [ApiIntegration]
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: "ANY /"
-      Target: !Sub "integrations/${ApiIntegration}"
-
-  ApiDeployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn: [RootRoute, DefaultRoute]
-    Properties:
-      ApiId: !Ref HttpApi
-
-  ApiStage:
-    Type: AWS::ApiGatewayV2::Stage
-    DependsOn: [ApiDeployment]
-    Properties:
-      ApiId: !Ref HttpApi
-      DeploymentId: !Ref ApiDeployment
-      StageName: "dev"
-      AutoDeploy: true
-
 Outputs:
-  ApiEndpoint:
+   ApiEndpoint:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/dev/"
-
   ServiceDiscoveryName:
     Description: "Internal service DNS name"
     Value: !Sub "${ServiceDiscoveryService.Name}.${ProjectName}.local"
-
   ECSClusterName:
     Description: "ECS Cluster Name"
     Value: !Ref ECSCluster
