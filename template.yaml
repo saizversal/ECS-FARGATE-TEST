@@ -94,13 +94,32 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PrivateRouteTable:
-    Type: AWS::EC2::RouteTable
+  # NAT Gateway for private subnet internet access (for ECR fallback)
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
     Properties:
-      VpcId: !Ref VPC
+      Domain: vpc
       Tags:
         - Key: Name
-          Value: ecs-api-private-rt
+          Value: ecs-api-nat-eip
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: ecs-api-nat-gateway
+
+  # Route to NAT Gateway for private subnets
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -120,28 +139,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # VPC Endpoints Security Group - Secure configuration
-  VPCEndpointSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for VPC endpoints
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourceSecurityGroupId: !Ref ECSSecurityGroup  # Only ECS tasks can access
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: vpc-endpoint-sg
-
+  # Create ECS Security Group first
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -153,13 +151,51 @@ Resources:
           ToPort: !Ref ContainerPort
           CidrIp: 10.0.0.0/16
       SecurityGroupEgress:
-        - IpProtocol: -1
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: "HTTPS to VPC Endpoints"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP to VPC Endpoints"
       Tags:
         - Key: Name
           Value: ecs-service-sg
 
-  # VPC Endpoints for ECR
+  # VPC Endpoints Security Group - More permissive for troubleshooting
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for VPC endpoints
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16
+          Description: "HTTPS access from VPC"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/16
+          Description: "HTTP access from VPC"
+        # Allow from ECS Security Group specifically
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: "HTTPS from ECS tasks"
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: vpc-endpoint-sg
+
+  # VPC Endpoints for ECR - Enhanced configuration
   ECRApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -176,13 +212,15 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "ecr:GetAuthorizationToken"
               - "ecr:BatchCheckLayerAvailability"
               - "ecr:GetDownloadUrlForLayer"
               - "ecr:BatchGetImage"
+              - "ecr:DescribeRepositories"
+              - "ecr:DescribeImages"
+              - "ecr:ListImages"
             Resource: "*"
 
   ECRDkrEndpoint:
@@ -201,13 +239,15 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "ecr:GetAuthorizationToken"
               - "ecr:BatchCheckLayerAvailability"
               - "ecr:GetDownloadUrlForLayer"
               - "ecr:BatchGetImage"
+              - "ecr:DescribeRepositories"
+              - "ecr:DescribeImages"
+              - "ecr:ListImages"
             Resource: "*"
 
   # VPC Endpoint for S3 (Gateway endpoint - no charge)
@@ -224,7 +264,7 @@ Resources:
       RouteTableIds:
         - !Ref PrivateRouteTable
 
-  # VPC Endpoint for CloudWatch Logs
+  # VPC Endpoint for CloudWatch Logs - Enhanced
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -241,16 +281,16 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "logs:CreateLogGroup"
               - "logs:CreateLogStream"
               - "logs:PutLogEvents"
               - "logs:DescribeLogStreams"
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - "logs:DescribeLogGroups"
+            Resource: "*"
 
-  # VPC Endpoint for ECS (needed for task management)
+  # VPC Endpoint for ECS - Enhanced
   ECSEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -267,8 +307,7 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "ecs:CreateCluster"
               - "ecs:DeregisterContainerInstance"
@@ -278,9 +317,12 @@ Resources:
               - "ecs:StartTelemetrySession"
               - "ecs:UpdateContainerInstancesState"
               - "ecs:Submit*"
+              - "ecs:DescribeClusters"
+              - "ecs:DescribeServices"
+              - "ecs:DescribeTasks"
             Resource: "*"
 
-  # VPC Endpoint for ECS Agent
+  # VPC Endpoint for ECS Agent - Enhanced
   ECSAgentEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -297,17 +339,17 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "ecs:RegisterContainerInstance"
               - "ecs:DeregisterContainerInstance"
               - "ecs:DiscoverPollEndpoint"
               - "ecs:Submit*"
               - "ecs:Poll"
+              - "ecs:StartTelemetrySession"
             Resource: "*"
 
-  # VPC Endpoint for ECS Telemetry
+  # VPC Endpoint for ECS Telemetry - Enhanced
   ECSTelemetryEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -324,12 +366,12 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Principal: "*"
             Action:
               - "ecs:StartTelemetrySession"
             Resource: "*"
 
+  # Enhanced ECS Execution Role with additional ECR permissions
   ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -342,6 +384,20 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: AdditionalECRAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ecr:GetAuthorizationToken"
+                  - "ecr:BatchCheckLayerAvailability"
+                  - "ecr:GetDownloadUrlForLayer"
+                  - "ecr:BatchGetImage"
+                  - "ecr:DescribeRepositories"
+                  - "ecr:DescribeImages"
+                Resource: "*"
 
   ECSPolicy:
     Type: AWS::IAM::Policy
