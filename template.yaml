@@ -33,6 +33,23 @@ Resources:
         - Key: Name
           Value: ecs-api-vpc
 
+  # DHCP Options Set for proper DNS resolution
+  DHCPOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Sub "${AWS::Region}.compute.internal"
+      DomainNameServers:
+        - AmazonProvidedDNS
+      Tags:
+        - Key: Name
+          Value: ecs-api-dhcp-options
+
+  DHCPOptionsAssociation:
+    Type: AWS::EC2::VPCDHCPOptionsAssociation
+    Properties:
+      VpcId: !Ref VPC
+      DhcpOptionsId: !Ref DHCPOptions
+
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -136,18 +153,23 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
-          Description: "HTTPS to VPC Endpoints"
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS outbound - required for VPC endpoints"
         - IpProtocol: tcp
           FromPort: 53
           ToPort: 53
-          CidrIp: 10.0.0.0/16
-          Description: "DNS resolution within VPC"
+          CidrIp: 0.0.0.0/0
+          Description: "DNS TCP resolution"
         - IpProtocol: udp
           FromPort: 53
           ToPort: 53
-          CidrIp: 10.0.0.0/16
-          Description: "DNS resolution within VPC"
+          CidrIp: 0.0.0.0/0
+          Description: "DNS UDP resolution"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP outbound - for health checks"
       Tags:
         - Key: Name
           Value: ecs-service-sg
@@ -162,16 +184,13 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup
-          Description: "HTTPS from ECS tasks"
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
           CidrIp: 10.0.0.0/16
           Description: "HTTPS access from VPC"
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/16
+          Description: "HTTP access from VPC"
       Tags:
         - Key: Name
           Value: vpc-endpoint-sg
