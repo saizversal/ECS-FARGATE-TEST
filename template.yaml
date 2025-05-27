@@ -405,7 +405,6 @@ Resources:
       - ServiceDiscoveryService
       - ECRApiEndpoint
       - ECRDkrEndpoint
-      - S3Endpoint
       - LogsEndpoint
       - ECSEndpoint
       - ECSAgentEndpoint
