@@ -206,6 +206,20 @@ Resources:
               - "ecr:BatchGetImage"
             Resource: "*"
 
+  # VPC Endpoint for S3 (Gateway endpoint - no charge)
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn: 
+      - PrivateRouteTable
+      - PrivateSubnet1RouteTableAssociation
+      - PrivateSubnet2RouteTableAssociation
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
   # VPC Endpoint for CloudWatch Logs
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
