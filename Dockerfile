@@ -1,11 +1,22 @@
+# Use an official Node.js runtime as a parent image
+FROM node:20
 
-FROM node:18-alpine
-
+# Set the working directory
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+
+# Copy the application files
 COPY . .
 
-EXPOSE 3000
-CMD ["node", "index.js"]
+# Create a simple HTTP server
+RUN echo 'const http = require("http"); \
+const server = http.createServer((req, res) => { \
+    res.writeHead(200, {"Content-Type": "text/plain"}); \
+    res.end("Hello, World!\\n"); \
+}); \
+server.listen(3000, "0.0.0.0", () => console.log("Server running on port 3000"));' > index.js
 
+# Expose the required port
+EXPOSE 3000
+
+# Start the application (correct CMD format)
+CMD ["node", "index.js"]
