@@ -532,7 +532,7 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: IntegrationUri: !Sub "http://${ProjectName}-service.${ProjectName}.local:${ContainerPort}"
+      IntegrationUri: !GetAtt ServiceDiscoveryService.Arn
       IntegrationMethod: ANY
       ConnectionType: VPC_LINK
       ConnectionId: !Ref VPCLink
