@@ -2,6 +2,10 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Complete template
 
 Parameters:
+  AWSRegion:
+    Type: String
+  AWSAccountID:
+    Type: String
   ProjectName:
     Type: String
     Description: Project name for resource naming
@@ -452,7 +456,7 @@ Resources:
           HealthCheck:
             Command:
               - "CMD-SHELL"
-              - !Sub "wget --no-verbose --tries=1 --spider http://localhost:${ContainerPort}${HealthCheckPath} || exit 1"
+              - !Sub "curl -f http://localhost:${ContainerPort}${HealthCheckPath} || exit 1"
             Interval: 15
             Timeout: 5
             Retries: 3
@@ -460,7 +464,7 @@ Resources:
           Essential: true
           Environment:
             - Name: PORT
-              Value: !Ref ContainerPort
+              Value: !Sub "${ContainerPort}"
             - Name: HEALTH_CHECK_PATH
               Value: !Ref HealthCheckPath
 
@@ -532,7 +536,7 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: !GetAtt ServiceDiscoveryService.Arn
+      IntegrationUri: !Sub "http://${ProjectName}-service.${ProjectName}.local:${ContainerPort}"
       IntegrationMethod: ANY
       ConnectionType: VPC_LINK
       ConnectionId: !Ref VPCLink
