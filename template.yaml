@@ -1,28 +1,36 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: ECS Fargate with Cloud Map and API Gateway integration using VPC Endpoints (No NAT Gateway)
+Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Fixed ECR connectivity and URI issues
 
 Parameters:
   AWSRegion:
     Type: String
+    Default: !Ref 'AWS::Region'
   AWSAccountID:
     Type: String
+    Default: !Ref 'AWS::AccountId'
   ProjectName:
     Type: String
+    Description: Project name for resource naming
   ECRCluster:
     Type: String
+    Description: ECR cluster name (unused but kept for compatibility)
   ECRContainer:
     Type: String
+    Description: ECR container name (unused but kept for compatibility)
   ECSContainerImageURI:
     Type: String
+    Description: Full ECR image URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-app:latest)
   ContainerPort:
     Type: Number
     Default: 3000
+    Description: Port your container listens on
   HealthCheckPath:
     Type: String
     Default: "/health"
-    Description: "Health check endpoint path"
+    Description: Health check endpoint path
 
 Resources:
+  # VPC Configuration
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -31,9 +39,9 @@ Resources:
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: ecs-api-vpc
+          Value: !Sub "${ProjectName}-vpc"
 
-  # DHCP Options Set for proper DNS resolution
+  # DHCP Options for proper DNS resolution
   DHCPOptions:
     Type: AWS::EC2::DHCPOptions
     Properties:
@@ -42,7 +50,7 @@ Resources:
         - AmazonProvidedDNS
       Tags:
         - Key: Name
-          Value: ecs-api-dhcp-options
+          Value: !Sub "${ProjectName}-dhcp-options"
 
   DHCPOptionsAssociation:
     Type: AWS::EC2::VPCDHCPOptionsAssociation
@@ -50,12 +58,13 @@ Resources:
       VpcId: !Ref VPC
       DhcpOptionsId: !Ref DHCPOptions
 
+  # Internet Gateway
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: ecs-api-igw
+          Value: !Sub "${ProjectName}-igw"
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -63,6 +72,7 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
+  # Subnets
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -72,7 +82,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: ecs-api-public-subnet-1
+          Value: !Sub "${ProjectName}-public-subnet-1"
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -83,7 +93,7 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: ecs-api-private-subnet-1
+          Value: !Sub "${ProjectName}-private-subnet-1"
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -94,15 +104,16 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: ecs-api-private-subnet-2
+          Value: !Sub "${ProjectName}-private-subnet-2"
 
+  # Route Tables
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: ecs-api-public-rt
+          Value: !Sub "${ProjectName}-public-rt"
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -110,8 +121,9 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: ecs-api-private-rt
+          Value: !Sub "${ProjectName}-private-rt"
 
+  # Routes
   PublicRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -119,6 +131,7 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
+  # Route Table Associations
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -137,7 +150,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # Enhanced ECS Security Group with VPC endpoint access
+  # Security Groups
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -154,7 +167,7 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
-          Description: "HTTPS outbound - required for VPC endpoints"
+          Description: "HTTPS outbound for VPC endpoints and ECR"
         - IpProtocol: tcp
           FromPort: 53
           ToPort: 53
@@ -169,12 +182,11 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: "HTTP outbound - for health checks"
+          Description: "HTTP outbound for health checks"
       Tags:
         - Key: Name
-          Value: ecs-service-sg
+          Value: !Sub "${ProjectName}-ecs-sg"
 
-  # VPC Endpoints Security Group - Allow all traffic from ECS
   VPCEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -184,23 +196,23 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
-          Description: "HTTPS access from VPC"
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: "HTTPS access from ECS tasks"
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 10.0.0.0/16
-          Description: "HTTP access from VPC"
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: "HTTP access from ECS tasks"
       Tags:
         - Key: Name
-          Value: vpc-endpoint-sg
+          Value: !Sub "${ProjectName}-vpc-endpoint-sg"
 
-  # VPC Endpoints for ECR - Critical for image pulling
+  # VPC Endpoints - Critical for ECR connectivity without NAT Gateway
   ECRApiEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -213,14 +225,21 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action: "*"
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:DescribeRepositories"
+              - "ecr:DescribeImages"
+              - "ecr:ListImages"
             Resource: "*"
 
   ECRDkrEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -233,15 +252,19 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action: "*"
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
             Resource: "*"
 
-  # VPC Endpoint for S3 (Gateway endpoint - required for ECR layer storage)
+  # S3 Gateway Endpoint - Required for ECR layer storage
   S3Endpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
       VpcEndpointType: Gateway
       RouteTableIds:
         - !Ref PrivateRouteTable
@@ -250,15 +273,17 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action: "*"
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
             Resource: "*"
 
-  # VPC Endpoint for CloudWatch Logs
+  # CloudWatch Logs Endpoint
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -271,15 +296,20 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: "*"
-            Action: "*"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "logs:DescribeLogStreams"
+              - "logs:DescribeLogGroups"
             Resource: "*"
 
-  # VPC Endpoint for ECS
+  # ECS Endpoints
   ECSEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -287,20 +317,12 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: "*"
-            Action: "*"
-            Resource: "*"
 
-  # VPC Endpoint for ECS Agent
   ECSAgentEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs-agent
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs-agent"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -308,20 +330,12 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: "*"
-            Action: "*"
-            Resource: "*"
 
-  # VPC Endpoint for ECS Telemetry
   ECSTelemetryEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecs-telemetry
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecs-telemetry"
       VpcEndpointType: Interface
       SubnetIds:
         - !Ref PrivateSubnet1
@@ -329,18 +343,12 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: "*"
-            Action: "*"
-            Resource: "*"
 
-  # Enhanced ECS Execution Role with comprehensive ECR permissions
+  # IAM Role for ECS Task Execution
   ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${ProjectName}-ecs-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -351,7 +359,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Policies:
-        - PolicyName: EnhancedECRAccess
+        - PolicyName: EnhancedECRAndLogsAccess
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -373,21 +381,36 @@ Resources:
                   - "logs:DescribeLogStreams"
                   - "logs:DescribeLogGroups"
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "servicediscovery:RegisterInstance"
+                  - "servicediscovery:DeregisterInstance"
+                  - "servicediscovery:DiscoverInstances"
+                  - "servicediscovery:Get*"
+                  - "servicediscovery:List*"
+                Resource: "*"
 
+  # ECS Resources
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub "${ProjectName}-cluster"
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
 
+  # Cloud Map Namespace and Service
   CloudMapNamespace:
     Type: AWS::ServiceDiscovery::PrivateDnsNamespace
     Properties:
       Name: !Sub "${ProjectName}.local"
       Vpc: !Ref VPC
+      Description: !Sub "Private DNS namespace for ${ProjectName}"
 
   ServiceDiscoveryService:
     Type: AWS::ServiceDiscovery::Service
-    DependsOn: [CloudMapNamespace]
     Properties:
       Name: !Sub "${ProjectName}-service"
       NamespaceId: !Ref CloudMapNamespace
@@ -398,17 +421,18 @@ Resources:
             Type: A
       HealthCheckCustomConfig:
         FailureThreshold: 1
+      Description: !Sub "Service discovery for ${ProjectName}"
 
-  # Log Group must be created before task definition
+  # CloudWatch Log Group
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/ecs/${ProjectName}"
-      RetentionInDays: 7
+      RetentionInDays: 14
 
+  # ECS Task Definition
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
-    DependsOn: [LogGroup]
     Properties:
       Family: !Sub "${ProjectName}-task"
       Cpu: 256
@@ -418,7 +442,7 @@ Resources:
         - FARGATE
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-        - Name: app
+        - Name: !Sub "${ProjectName}-container"
           Image: !Ref ECSContainerImageURI
           PortMappings:
             - ContainerPort: !Ref ContainerPort
@@ -427,9 +451,8 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-group: !Sub "/ecs/${ProjectName}"
-              awslogs-region: !Ref AWSRegion
+              awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
-          # Simplified health check that doesn't require curl
           HealthCheck:
             Command:
               - "CMD-SHELL"
@@ -440,17 +463,15 @@ Resources:
             StartPeriod: 60
           Essential: true
           Environment:
-            - Name: HEALTH_CHECK_PATH
-              Value: !Ref HealthCheckPath
             - Name: PORT
               Value: !Ref ContainerPort
+            - Name: HEALTH_CHECK_PATH
+              Value: !Ref HealthCheckPath
 
+  # ECS Service
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: 
-      - TaskDefinition
-      - ECSCluster
-      - ServiceDiscoveryService
+    DependsOn:
       - ECRApiEndpoint
       - ECRDkrEndpoint
       - S3Endpoint
@@ -482,11 +503,13 @@ Resources:
           Enable: true
           Rollback: true
 
+  # API Gateway Resources
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
       Name: !Sub "${ProjectName}-http-api"
       ProtocolType: HTTP
+      Description: !Sub "HTTP API for ${ProjectName}"
 
   VpcLink:
     Type: AWS::ApiGatewayV2::VpcLink
@@ -498,9 +521,10 @@ Resources:
       SecurityGroupIds:
         - !Ref ECSSecurityGroup
 
+  # Fixed API Integration with proper URI format
   ApiIntegration:
     Type: AWS::ApiGatewayV2::Integration
-    DependsOn: [VpcLink, HttpApi, ECSService]
+    DependsOn: [ECSService]
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: HTTP_PROXY
@@ -509,63 +533,73 @@ Resources:
       ConnectionType: VPC_LINK
       ConnectionId: !Ref VpcLink
       PayloadFormatVersion: "1.0"
+      TimeoutInMillis: 29000
 
-  RootRoute:
-    Type: AWS::ApiGatewayV2::Route
-    DependsOn: [ApiIntegration]
-    Properties:
-      ApiId: !Ref HttpApi
-      RouteKey: "ANY /{proxy+}"
-      Target: !Sub "integrations/${ApiIntegration}"
-
+  # API Routes
   DefaultRoute:
     Type: AWS::ApiGatewayV2::Route
-    DependsOn: [ApiIntegration]
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: "ANY /"
       Target: !Sub "integrations/${ApiIntegration}"
 
-  HealthRoute:
+  ProxyRoute:
     Type: AWS::ApiGatewayV2::Route
-    DependsOn: [ApiIntegration]
     Properties:
       ApiId: !Ref HttpApi
-      RouteKey: !Sub "GET ${HealthCheckPath}"
+      RouteKey: "ANY /{proxy+}"
       Target: !Sub "integrations/${ApiIntegration}"
 
+  # API Deployment and Stage
   ApiDeployment:
     Type: AWS::ApiGatewayV2::Deployment
-    DependsOn: [RootRoute, DefaultRoute, HealthRoute]
+    DependsOn: [DefaultRoute, ProxyRoute]
     Properties:
       ApiId: !Ref HttpApi
+      Description: !Sub "Deployment for ${ProjectName} API"
 
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
-    DependsOn: [ApiDeployment]
     Properties:
       ApiId: !Ref HttpApi
       DeploymentId: !Ref ApiDeployment
       StageName: "dev"
       AutoDeploy: true
+      Description: "Development stage"
 
 Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/dev/"
+    Export:
+      Name: !Sub "${ProjectName}-api-endpoint"
 
   HealthCheckEndpoint:
     Description: "Health check endpoint URL"
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/dev${HealthCheckPath}"
+    Export:
+      Name: !Sub "${ProjectName}-health-endpoint"
 
   ServiceDiscoveryName:
     Description: "Internal service DNS name"
-    Value: !Sub "${ServiceDiscoveryService.Name}.${ProjectName}.local"
+    Value: !Sub "${ProjectName}-service.${ProjectName}.local"
+    Export:
+      Name: !Sub "${ProjectName}-service-dns"
 
   ECSClusterName:
     Description: "ECS Cluster Name"
     Value: !Ref ECSCluster
+    Export:
+      Name: !Sub "${ProjectName}-cluster-name"
 
-  VPCEndpointsCreated:
-    Description: "VPC Endpoints created for ECR connectivity"
-    Value: "ECR API, ECR DKR, S3, CloudWatch Logs, ECS, ECS Agent, ECS Telemetry"
+  VPCId:
+    Description: "VPC ID"
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${ProjectName}-vpc-id"
+
+  ECSExecutionRoleArn:
+    Description: "ECS Execution Role ARN"
+    Value: !GetAtt ECSExecutionRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-execution-role-arn"
