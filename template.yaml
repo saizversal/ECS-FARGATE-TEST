@@ -1,22 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Fixed ECR connectivity and URI issues
+Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Fixed template validation issues
 
 Parameters:
-  AWSRegion:
-    Type: String
-    Default: !Ref 'AWS::Region'
-  AWSAccountID:
-    Type: String
-    Default: !Ref 'AWS::AccountId'
   ProjectName:
     Type: String
     Description: Project name for resource naming
   ECRCluster:
     Type: String
     Description: ECR cluster name (unused but kept for compatibility)
+    Default: "default"
   ECRContainer:
     Type: String
     Description: ECR container name (unused but kept for compatibility)
+    Default: "default"
   ECSContainerImageURI:
     Type: String
     Description: Full ECR image URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-app:latest)
