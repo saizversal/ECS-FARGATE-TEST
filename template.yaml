@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Fixed template validation issues
+Description: Enhanced ECS Fargate with Cloud Map and API Gateway integration - Complete template
 
 Parameters:
   ProjectName:
@@ -453,7 +453,7 @@ Resources:
             Command:
               - "CMD-SHELL"
               - !Sub "wget --no-verbose --tries=1 --spider http://localhost:${ContainerPort}${HealthCheckPath} || exit 1"
-            Interval: 30
+            Interval: 15
             Timeout: 5
             Retries: 3
             StartPeriod: 60
@@ -491,7 +491,7 @@ Resources:
           Subnets:
             - !Ref PrivateSubnet1
             - !Ref PrivateSubnet2
-      HealthCheckGracePeriodSeconds: 300
+      HealthCheckGracePeriodSeconds: 120
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 50
@@ -499,15 +499,8 @@ Resources:
           Enable: true
           Rollback: true
 
-  # API Gateway Resources
-  HttpApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: !Sub "${ProjectName}-http-api"
-      ProtocolType: HTTP
-      Description: !Sub "HTTP API for ${ProjectName}"
-
-  VpcLink:
+  # VPC Link for API Gateway to access private ECS service
+  VPCLink:
     Type: AWS::ApiGatewayV2::VpcLink
     Properties:
       Name: !Sub "${ProjectName}-vpc-link"
@@ -517,17 +510,32 @@ Resources:
       SecurityGroupIds:
         - !Ref ECSSecurityGroup
 
-  # Fixed API Integration with proper URI format
+  # HTTP API Gateway
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      Description: !Sub "HTTP API for ${ProjectName}"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+
+  # API Integration - connects API Gateway to ECS service
   ApiIntegration:
     Type: AWS::ApiGatewayV2::Integration
     DependsOn: [ECSService]
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: HTTP_PROXY
-      IntegrationUri: !Sub "http://${ProjectName}-service.${ProjectName}.local:${ContainerPort}"
+      IntegrationUri: !Sub "http://${ServiceName}.${ServiceDiscoveryService.Name}:${ContainerPort}"
       IntegrationMethod: ANY
       ConnectionType: VPC_LINK
-      ConnectionId: !Ref VpcLink
+      ConnectionId: !Ref VPCLink
       PayloadFormatVersion: "1.0"
       TimeoutInMillis: 29000
 
